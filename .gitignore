@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+database/output/*.sql.gz
+evaluation/reports/
+*.egg-info/
+.chainlit/
+.files/
+uv.lock.bak

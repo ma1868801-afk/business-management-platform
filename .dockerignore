@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.env
+database/output/*.sql.gz
+database/generator/__pycache__/
+evaluation/reports/
+tests/
+.pytest_cache/
+.chainlit/

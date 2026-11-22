@@ -1,0 +1,51 @@
+[project]
+name = "bmp-assistant"
+version = "0.1.0"
+description = "Business Management Platform: LangGraph multi-agent assistant for Nakhla Retail Group (business analytics, forecasting, company knowledge base)."
+requires-python = ">=3.11,<3.13"
+readme = "README.md"
+dependencies = [
+    "langgraph>=0.2.60",
+    "langgraph-checkpoint>=2.0.9",
+    "groq>=0.13.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "chainlit>=2.0.0",
+    "psycopg[binary,pool]>=3.2.3",
+    "chromadb>=0.5.15",
+    "torch==2.6.0",
+    "sentence-transformers>=3.3.1",
+    "scikit-learn>=1.5.2",
+    "pandas>=2.2.3",
+    "numpy>=1.26.4,<2.0.0",
+    "scipy>=1.14.1",
+    "pglast>=6.9",
+    "pydantic>=2.9.2",
+    "pydantic-settings>=2.6.1",
+    "python-dotenv>=1.0.1",
+    "tenacity>=9.0.0",
+    "pyyaml>=6.0.2",
+    "httpx>=0.27.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.4",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

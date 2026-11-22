@@ -1,0 +1,90 @@
+# Reference oracle queries for `oracle_sql`/`oracle_and_guarantee` scenarios
+# (06_evaluation_plan.md section 6: "the harness keeps one entry per scenario in
+# tests/oracles.yaml ... reference queries are written for the oracle, not copied from the
+# RAG patterns, so that a defect in a pattern cannot validate itself").
+#
+# Every query below was written independently of `rag_sources/` (against the base tables,
+# not the `v_sales_detail`/`v_weekly_product_demand` views the subgraphs query) and verified
+# by hand against the live Phase 2 test cluster (seed 327) before being recorded here --
+# see the session transcript for the verification run. This file covers a representative
+# sample of the oracle_sql scenarios, one from most answer shapes (a single aggregate, a
+# two-column single row, and a multi-row group-by) and both suites that use them
+# (data_analysis, inventory); extending it to every remaining oracle_sql scenario in the 220
+# is exactly the "tuning" work 06_evaluation_plan.md section 8.2 describes M7 as -- an
+# iterative activity this harness is built to support, not a one-shot list.
+#
+# `shape: single_row` -> the oracle is one dict of {column: value}.
+# `shape: multi_row` -> the oracle is a list of such dicts, in the order returned.
+
+EV-DA-001:
+  description: "Total net revenue (Completed orders) for calendar year 2025"
+  shape: single_row
+  sql: |
+    SELECT ROUND(SUM(soi.line_total), 2) AS net_revenue
+    FROM sales_order_items soi
+    JOIN sales_orders so ON so.order_id = soi.order_id
+    WHERE so.status = 'Completed' AND so.order_date BETWEEN DATE '2025-01-01' AND DATE '2025-12-31';
+
+EV-DA-002:
+  description: "Count of Completed orders and their average order value, October 2026"
+  shape: single_row
+  sql: |
+    SELECT COUNT(*) AS completed_orders, ROUND(AVG(total_amount), 2) AS avg_order_value
+    FROM sales_orders
+    WHERE status = 'Completed' AND order_date BETWEEN DATE '2026-10-01' AND DATE '2026-10-31';
+
+EV-DA-006:
+  description: "Net revenue per product line (category), calendar year 2025"
+  shape: multi_row
+  sql: |
+    SELECT pc.category_name, ROUND(SUM(soi.line_total), 2) AS net_revenue
+    FROM sales_order_items soi
+    JOIN sales_orders so ON so.order_id = soi.order_id
+    JOIN products p ON p.product_id = soi.product_id
+    JOIN product_categories pc ON pc.category_id = p.category_id
+    WHERE so.status = 'Completed' AND so.order_date BETWEEN DATE '2025-01-01' AND DATE '2025-12-31'
+    GROUP BY pc.category_name
+    ORDER BY net_revenue DESC;
+
+EV-INV-001:
+  description: "On-hand and available quantity of ELEC-0001 at RYD-DC"
+  shape: single_row
+  sql: |
+    SELECT il.quantity_on_hand, il.quantity_available
+    FROM inventory_levels il
+    JOIN products p ON p.product_id = il.product_id
+    JOIN branches b ON b.branch_id = il.branch_id
+    WHERE p.sku = 'ELEC-0001' AND b.branch_code = 'RYD-DC'
+    LIMIT 1;
+
+EV-INV-003:
+  description: "Inventory value at cost (quantity on hand times unit cost), by product line"
+  shape: multi_row
+  sql: |
+    SELECT pc.category_name, ROUND(SUM(il.quantity_on_hand * p.unit_cost), 2) AS inventory_value_at_cost
+    FROM inventory_levels il
+    JOIN products p ON p.product_id = il.product_id
+    JOIN product_categories pc ON pc.category_id = p.category_id
+    GROUP BY pc.category_name
+    ORDER BY inventory_value_at_cost DESC;
+
+EV-INV-011:
+  description: "Purchase orders from SUP-04 that arrived late, and the average days late"
+  shape: single_row
+  sql: |
+    SELECT COUNT(*) AS late_pos, ROUND(AVG(po.actual_delivery_date - po.expected_delivery_date), 2) AS avg_days_late
+    FROM purchase_orders po
+    JOIN suppliers s ON s.supplier_id = po.supplier_id
+    WHERE s.supplier_code = 'SUP-04' AND po.actual_delivery_date IS NOT NULL
+      AND po.actual_delivery_date > po.expected_delivery_date;
+
+EV-DA-041:
+  description: "Total discount given per promotion type, calendar year 2025"
+  shape: multi_row
+  sql: |
+    SELECT pr.promotion_type, ROUND(SUM(so.discount_amount), 2) AS total_discount
+    FROM sales_orders so
+    JOIN promotions pr ON pr.promotion_id = so.promotion_id
+    WHERE so.status = 'Completed' AND so.order_date BETWEEN DATE '2025-01-01' AND DATE '2025-12-31'
+    GROUP BY pr.promotion_type
+    ORDER BY total_discount DESC;

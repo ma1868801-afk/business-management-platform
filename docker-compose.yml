@@ -1,0 +1,171 @@
+x-app-env: &app-env
+  GROQ_API_KEY: ${GROQ_API_KEY}
+  LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+  JUDGE_MODEL: ${JUDGE_MODEL:-openai/gpt-oss-120b}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+  RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
+  RERANK_MODE: ${RERANK_MODE:-cross_encoder}
+  RAG_LLM_PREPROCESS_ENABLED: ${RAG_LLM_PREPROCESS_ENABLED:-false}
+  # `db` is this compose file's own Postgres service (below), not the host machine -- see the
+  # integration-fix note on that service for why this changed from host.docker.internal.
+  DATABASE_URL_READONLY: postgresql://bmp_readonly:${BMP_READONLY_PASSWORD}@db:5432/bmp
+  # RAG storage is ChromaDB, not PostgreSQL (docs/12_chromadb_migration.md) -- `indexer` and
+  # `app` are separate containers sharing the one `chroma` service below, over HTTP, the same
+  # way they already share one `db` Postgres service for business data.
+  CHROMA_HOST: chroma
+  CHROMA_PORT: ${CHROMA_PORT:-8000}
+  REFERENCE_DATE: ${REFERENCE_DATE:-2026-10-31}
+  MAX_REQUEST_SECONDS: ${MAX_REQUEST_SECONDS:-90}
+  BMP_CANARY_TOKEN: ${BMP_CANARY_TOKEN:-}
+  BMP_TEST_HOOKS: ${BMP_TEST_HOOKS:-0}
+  # LLM transport reliability (app/llm/client.py, see RAG_REFACTOR_REPORT.md section 3) --
+  # every service that can call the LLM (app, indexer, and ui, which proxies chat turns to
+  # app but can also hit app/llm/client.py directly in-process depending on deployment)
+  # needs these, not just `app`, since they all import the same GroqClient.
+  LLM_RETRY_LIMIT: ${LLM_RETRY_LIMIT:-1}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-15}
+  LLM_RETRY_MIN_WAIT: ${LLM_RETRY_MIN_WAIT:-0.5}
+  LLM_RETRY_MAX_WAIT: ${LLM_RETRY_MAX_WAIT:-3.0}
+  # The Chroma startup-race fix (app/rag/store.py's `_wait_for_chroma_ready`) -- defaults
+  # (30 retries x 2s = 60s bounded wait) match the `chroma` healthcheck's own generous
+  # `retries: 20` x `interval: 5s` (~100s to first-healthy) with headroom to spare.
+  CHROMA_CONNECT_RETRIES: ${CHROMA_CONNECT_RETRIES:-30}
+  CHROMA_CONNECT_RETRY_WAIT: ${CHROMA_CONNECT_RETRY_WAIT:-2.0}
+  # Logging (app/logging_utils.py)
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_JSON: ${LOG_JSON:-true}
+
+services:
+
+  # Business data (docs/12_chromadb_migration.md: "`db` (plain `pgvector/pgvector:pg16` image
+  # still used, but now only for its Postgres server -- the extension is simply unused)").
+  #
+  # INTEGRATION FIX: this service, and `db-init` below, were documented in
+  # `docs/11_deployment_guide.md` ("Runs `db`, `db-init`, `chroma`, `indexer`, `app`, `ui` as
+  # defined in `docker-compose.yml`") but were missing from this file entirely -- the previous
+  # version pointed `DATABASE_URL_READONLY` at `host.docker.internal:5432`, i.e. a Postgres
+  # server the person running `docker compose up` had to stand up by hand outside Docker, with
+  # no service here to do it. Restored to match the documented design: schema + business data
+  # load automatically on first start via Postgres's own `docker-entrypoint-initdb.d`
+  # mechanism (the files below are mounted individually, in `database/README.md`'s load order,
+  # deliberately skipping `04_roles.sql` -- see `db-init` -- and `05_verify_guarantees.sql`,
+  # which isn't a load step).
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: bmp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/sql/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/sql/02_data_1_reference.sql:/docker-entrypoint-initdb.d/02_data_1_reference.sql:ro
+      - ./database/sql/02_data_2_sales_orders.sql:/docker-entrypoint-initdb.d/02_data_2_sales_orders.sql:ro
+      - ./database/sql/02_data_3_sales_order_items.sql:/docker-entrypoint-initdb.d/02_data_3_sales_order_items.sql:ro
+      - ./database/sql/02_data_4_returns_inventory_purchasing.sql:/docker-entrypoint-initdb.d/02_data_4_returns_inventory_purchasing.sql:ro
+      - ./database/sql/03_indexes.sql:/docker-entrypoint-initdb.d/03_indexes.sql:ro
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d bmp"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-off job (docs/11_deployment_guide.md section 3, step 2): creates the `bmp_readonly`
+  # role from `database/sql/04_roles.sql`. That file takes a `readonly_password` psql
+  # variable, which the `docker-entrypoint-initdb.d` mechanism above has no way to supply
+  # (it only runs bare `.sql`/`.sh` files, no per-file variables) -- so it runs here instead,
+  # once `db` is accepting connections, reading the real password from `.env`.
+  db-init:
+    image: pgvector/pgvector:pg16
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./database/sql/04_roles.sql:/sql/04_roles.sql:ro
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGDATABASE: bmp
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres}
+      BMP_READONLY_PASSWORD: ${BMP_READONLY_PASSWORD}
+    entrypoint: ["sh", "-c"]
+    command:
+      - 'psql -v ON_ERROR_STOP=1 -v readonly_password="$$BMP_READONLY_PASSWORD" -f /sql/04_roles.sql'
+    restart: "no"
+
+  # RAG storage (docs/12_chromadb_migration.md). Exposed only inside the compose network --
+  # the same "only the Chainlit port is exposed" principle 05_security_and_guardrails.md
+  # section 13 already applies to `db`. The open-source image ships with no authentication
+  # of its own (see that doc's residual-risk note); network isolation is the control here,
+  # exactly as it already is for `db`.
+  chroma:
+    image: chromadb/chroma:1.5.9
+    volumes:
+      - chromadata:/chroma/chroma
+    expose:
+      - "8000"
+    # INTEGRATION FIX: without this, `chroma`'s container can report "running" before the
+    # server inside it is actually accepting connections, and `indexer`'s old
+    # `condition: service_started` dependency (below) would let it start right into that
+    # race. curl/wget aren't guaranteed to be present in this image (it's a slim Python
+    # image whose only job is running the Chroma server), so the healthcheck uses the
+    # Python interpreter that's definitely there instead; `/api/v2/heartbeat` is the current
+    # Chroma server API (the `/api/v1/...` routes this project's own earlier docs mention
+    # were removed well before this pinned 1.5.9 image). See also `app/rag/store.py`'s
+    # `_wait_for_chroma_ready` for the same fix at the application level, which also covers
+    # running `indexer`/`app` outside Compose entirely.
+    
+
+  indexer:
+    build:
+      context: .
+      target: indexer
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      chroma:
+        condition: service_started
+    environment:
+      <<: *app-env
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: app
+    depends_on:
+      indexer:
+        condition: service_completed_successfully
+      db-init:
+        condition: service_completed_successfully
+      chroma:
+        condition: service_started
+    environment:
+      <<: *app-env
+    expose:
+      - "8080"
+    # Pandas sandbox isolation (05_security_and_guardrails.md section 7.2): the primary
+    # mechanism is the subprocess-level sandbox in app/tools/pandas_tool.py (AST validator,
+    # resource limits, scrubbed environment). This container-level hardening is the
+    # defense-in-depth layer recommended for a production deployment:
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+
+  ui:
+    build:
+      context: .
+      target: ui
+    depends_on:
+      - app
+    environment:
+      <<: *app-env
+      BACKEND_URL: http://app:8080
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
+  chromadata:
