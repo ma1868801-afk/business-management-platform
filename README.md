@@ -137,3 +137,6 @@ The project is a development/demo implementation and should not be interpreted a
 ---
 
 **Developed as an AI Engineering portfolio project.**
+## Screenshots
+
+![BMP Main Interface](screenshots/main-interface.png)
