@@ -406,6 +406,14 @@ The evaluation scenarios cover:
 The repository also contains unit and security tests for SQL validation, Pandas validation, RAG retrieval, regression tools, and workflow behavior.
 
 See [`evaluation/00_index.md`](evaluation/00_index.md) for the evaluation structure.
+## Evaluation
+
+The system was tested against 200 evaluation scenarios spanning all three LangGraph subgraphs (data analysis, inventory forecasting, and company-knowledge retrieval).
+
+- **Scenarios tested:** 200
+- **Task-completion rate:** 95%
+
+*(Add any other metrics you tracked — e.g. SQL validity rate, retrieval accuracy, latency — as additional bullets.)*
 
 ---
 
