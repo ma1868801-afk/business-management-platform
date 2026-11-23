@@ -413,7 +413,7 @@ The system was tested against 200 evaluation scenarios spanning all three LangGr
 - **Scenarios tested:** 200
 - **Task-completion rate:** 95%
 
-*(Add any other metrics you tracked — e.g. SQL validity rate, retrieval accuracy, latency — as additional bullets.)*
+
 
 ---
 
